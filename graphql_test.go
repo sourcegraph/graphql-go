@@ -1180,8 +1180,8 @@ func TestFragments(t *testing.T) {
 			`,
 		},
 		{
-			Schema:         starwarsSchema,
-			Query:          `
+			Schema: starwarsSchema,
+			Query: `
 				query {
 					human(id: "1000") {
 						id
@@ -1731,6 +1731,24 @@ func TestEnums(t *testing.T) {
 			},
 		},
 	})
+}
+
+type testDeprecatedArgsResolver struct{}
+
+func (r *testDeprecatedArgsResolver) A(ctx context.Context, args struct{ B *string }) int32 {
+	return 0
+}
+
+func TestDeprecatedArgs(t *testing.T) {
+	graphql.MustParseSchema(`
+		schema {
+			query: Query
+		}
+
+		type Query {
+			a(b: String @deprecated): Int!
+		}
+	`, &testDeprecatedArgsResolver{})
 }
 
 func TestInlineFragments(t *testing.T) {
@@ -2506,7 +2524,8 @@ func TestIntrospection(t *testing.T) {
 									"description": "Marks an element of a GraphQL schema as no longer supported.",
 									"locations": [
 										"FIELD_DEFINITION",
-										"ENUM_VALUE"
+										"ENUM_VALUE",
+										"ARGUMENT_DEFINITION"
 									],
 									"args": [
 										{

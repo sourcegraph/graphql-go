@@ -185,6 +185,10 @@ func applySelectionSet(r *Request, s *resolvable.Schema, e *resolvable.Object, s
 
 func applyFragment(r *Request, s *resolvable.Schema, e *resolvable.Object, frag *types.Fragment) []Selection {
 	if frag.On.Name != e.Name {
+		if _, ok := e.Interfaces[frag.On.Name]; ok {
+			return applyInterfaceFragment(r, s, e, frag)
+		}
+
 		t := r.Schema.Resolve(frag.On.Name)
 		face, ok := t.(*types.InterfaceTypeDefinition)
 		if !ok && frag.On.Name != "" {
@@ -219,6 +223,36 @@ func applyFragment(r *Request, s *resolvable.Schema, e *resolvable.Object, frag 
 		}
 	}
 	return applySelectionSet(r, s, e, frag.Selections)
+}
+
+func applyInterfaceFragment(r *Request, s *resolvable.Schema, e *resolvable.Object, frag *types.Fragment) []Selection {
+	// if the fragment is on an interface the object type implements, then filter out
+	// selections for any fragments that don't match this type.
+	var sels []types.Selection
+
+	for _, sel := range frag.Selections {
+		switch sel := sel.(type) {
+		case *types.Field:
+			sels = append(sels, sel)
+		case *types.InlineFragment:
+			if sel.On.Name != e.Name {
+				if _, ok := e.Interfaces[sel.On.Name]; !ok {
+					continue
+				}
+			}
+			sels = append(sels, sel)
+		case *types.FragmentSpread:
+			f := &r.Doc.Fragments.Get(sel.Name.Name).Fragment
+			if f.On.Name != e.Name {
+				if _, ok := e.Interfaces[f.On.Name]; !ok {
+					continue
+				}
+			}
+			sels = append(sels, sel)
+		}
+	}
+
+	return applySelectionSet(r, s, e, sels)
 }
 
 func applyField(r *Request, s *resolvable.Schema, e resolvable.Resolvable, sels []types.Selection) []Selection {

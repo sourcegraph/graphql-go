@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/graph-gophers/graphql-go/internal/exec"
 	"net/http"
 	"strings"
 
@@ -67,4 +68,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(responseJSON)
+
+	// Allow byte slice to be reused
+	exec.BytePool.Put(responseJSON)
 }

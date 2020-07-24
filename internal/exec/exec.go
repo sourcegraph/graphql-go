@@ -40,15 +40,31 @@ func makePanicError(value interface{}) *errors.QueryError {
 	return errors.Errorf("graphql: panic occurred: %v", value)
 }
 
+var BytePool = sync.Pool{
+	New: func() interface{} {
+		return make([]byte, 0, 1024)
+	},
+}
+
+func bufferUsingPool() *bytes.Buffer {
+	b := BytePool.Get().([]byte)
+	out := bytes.NewBuffer(b)
+	out.Reset()
+	return out
+}
+
 func (r *Request) Execute(ctx context.Context, s *resolvable.Schema, op *query.Operation) ([]byte, []*errors.QueryError) {
-	var out bytes.Buffer
+	out := bufferUsingPool()
 	func() {
 		defer r.handlePanic(ctx)
 		sels := selected.ApplyOperation(&r.Request, s, op)
-		r.execSelections(ctx, sels, nil, s, s.Resolver, &out, op.Type == query.Mutation)
+		r.execSelections(ctx, sels, nil, s, s.Resolver, out, op.Type == query.Mutation)
 	}()
 
 	if err := ctx.Err(); err != nil {
+		if out != nil {
+			BytePool.Put(out.Bytes())
+		}
 		return nil, []*errors.QueryError{errors.Errorf("%s", err)}
 	}
 
@@ -66,12 +82,6 @@ func resolvedToNull(b *bytes.Buffer) bool {
 	return bytes.Equal(b.Bytes(), []byte("null"))
 }
 
-var bufferPool = sync.Pool{
-	New: func() interface{}{
-		return new(bytes.Buffer)
-	},
-}
-
 func (r *Request) execSelections(ctx context.Context, sels []selected.Selection, path *pathSegment, s *resolvable.Schema, resolver reflect.Value, out *bytes.Buffer, serially bool) {
 	async := !serially && selected.HasAsyncSel(sels)
 
@@ -81,7 +91,7 @@ func (r *Request) execSelections(ctx context.Context, sels []selected.Selection,
 	defer func() {
 		for _, f := range fields {
 			if f.out != nil {
-				bufferPool.Put(f.out)
+				BytePool.Put(f.out.Bytes())
 			}
 		}
 	}()
@@ -93,7 +103,7 @@ func (r *Request) execSelections(ctx context.Context, sels []selected.Selection,
 			go func(f *fieldToExec) {
 				defer wg.Done()
 				defer r.handlePanic(ctx)
-				f.out = bufferPool.Get().(*bytes.Buffer)
+				f.out = bufferUsingPool()
 				f.out.Reset()
 				execFieldSelection(ctx, r, s, f, &pathSegment{path, f.field.Alias}, true)
 			}(f)
@@ -101,8 +111,7 @@ func (r *Request) execSelections(ctx context.Context, sels []selected.Selection,
 		wg.Wait()
 	} else {
 		for _, f := range fields {
-			f.out = bufferPool.Get().(*bytes.Buffer)
-			f.out.Reset()
+			f.out = bufferUsingPool()
 			execFieldSelection(ctx, r, s, f, &pathSegment{path, f.field.Alias}, true)
 		}
 	}
@@ -339,7 +348,7 @@ func (r *Request) execList(ctx context.Context, sels []selected.Selection, typ *
 				r.execSelectionSet(ctx, sels, typ.OfType, &pathSegment{path, i}, s, resolver.Index(i), &entryouts[i])
 			}(i)
 		}
-		for i := 0; i < concurrency;i++ {
+		for i := 0; i < concurrency; i++ {
 			sem <- struct{}{}
 		}
 	} else {

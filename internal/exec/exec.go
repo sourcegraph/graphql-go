@@ -48,9 +48,9 @@ var BytePool = sync.Pool{
 
 func bufferUsingPool() *bytes.Buffer {
 	b := BytePool.Get().([]byte)
-	out := bytes.NewBuffer(b)
-	out.Reset()
-	return out
+	buf := bytes.NewBuffer(b)
+	buf.Reset()
+	return buf
 }
 
 func (r *Request) Execute(ctx context.Context, s *resolvable.Schema, op *query.Operation) ([]byte, []*errors.QueryError) {

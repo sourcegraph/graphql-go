@@ -483,6 +483,9 @@ func parseUnionDef(l *common.Lexer) *types.Union {
 
 	union.Directives = common.ParseDirectives(l)
 	l.ConsumeToken('=')
+	if l.Peek() == '|' {
+		l.ConsumeToken('|')
+	}
 	union.TypeNames = []string{l.ConsumeIdent()}
 	for l.Peek() == '|' {
 		l.ConsumeToken('|')

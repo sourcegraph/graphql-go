@@ -1,9 +1,7 @@
 package exec
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"sync"
@@ -39,7 +37,7 @@ type extensionser interface {
 }
 
 func (r *Request) Execute(ctx context.Context, s *resolvable.Schema, op *types.OperationDefinition) ([]byte, []*errors.QueryError) {
-	var out bytes.Buffer
+	var out output
 	func() {
 		defer r.handlePanic(ctx)
 		sels := selected.ApplyOperation(&r.Request, s, op)
@@ -50,21 +48,17 @@ func (r *Request) Execute(ctx context.Context, s *resolvable.Schema, op *types.O
 		return nil, []*errors.QueryError{errors.Errorf("%s", err)}
 	}
 
-	return out.Bytes(), r.Errs
+	return out.bytes(), r.Errs
 }
 
 type fieldToExec struct {
 	field    *selected.SchemaField
 	sels     []selected.Selection
 	resolver reflect.Value
-	out      *bytes.Buffer
+	out      *output
 }
 
-func resolvedToNull(b *bytes.Buffer) bool {
-	return bytes.Equal(b.Bytes(), []byte("null"))
-}
-
-func (r *Request) execSelections(ctx context.Context, sels []selected.Selection, path *pathSegment, s *resolvable.Schema, resolver reflect.Value, out *bytes.Buffer, serially bool) {
+func (r *Request) execSelections(ctx context.Context, sels []selected.Selection, path *pathSegment, s *resolvable.Schema, resolver reflect.Value, out *output, serially bool) {
 	async := !serially && selected.HasAsyncSel(sels)
 
 	var fields []*fieldToExec
@@ -77,14 +71,14 @@ func (r *Request) execSelections(ctx context.Context, sels []selected.Selection,
 			go func(f *fieldToExec) {
 				defer wg.Done()
 				defer r.handlePanic(ctx)
-				f.out = new(bytes.Buffer)
+				f.out = new(output)
 				execFieldSelection(ctx, r, s, f, &pathSegment{path, f.field.Alias}, true)
 			}(f)
 		}
 		wg.Wait()
 	} else {
 		for _, f := range fields {
-			f.out = new(bytes.Buffer)
+			f.out = new(output)
 			execFieldSelection(ctx, r, s, f, &pathSegment{path, f.field.Alias}, true)
 		}
 	}
@@ -94,9 +88,9 @@ func (r *Request) execSelections(ctx context.Context, sels []selected.Selection,
 		// If a non-nullable child resolved to null, an error was added to the
 		// "errors" list in the response, so this field resolves to null.
 		// If this field is non-nullable, the error is propagated to its parent.
-		if _, ok := f.field.Type.(*types.NonNull); ok && resolvedToNull(f.out) {
+		if _, ok := f.field.Type.(*types.NonNull); ok && f.out.isNull() {
 			out.Reset()
-			out.Write([]byte("null"))
+			out.WriteString("null")
 			return
 		}
 
@@ -107,7 +101,7 @@ func (r *Request) execSelections(ctx context.Context, sels []selected.Selection,
 		out.WriteString(f.field.Alias)
 		out.WriteByte('"')
 		out.WriteByte(':')
-		out.Write(f.out.Bytes())
+		out.writeOutput(f.out)
 	}
 	out.WriteByte('}')
 }
@@ -245,7 +239,7 @@ func execFieldSelection(ctx context.Context, r *Request, s *resolvable.Schema, f
 	r.execSelectionSet(traceCtx, f.sels, f.field.Type, path, s, result, f.out)
 }
 
-func (r *Request) execSelectionSet(ctx context.Context, sels []selected.Selection, typ types.Type, path *pathSegment, s *resolvable.Schema, resolver reflect.Value, out *bytes.Buffer) {
+func (r *Request) execSelectionSet(ctx context.Context, sels []selected.Selection, typ types.Type, path *pathSegment, s *resolvable.Schema, resolver reflect.Value, out *output) {
 	t, nonNull := unwrapNonNull(typ)
 
 	// a reflect.Value of a nil interface will show up as an Invalid value
@@ -280,11 +274,9 @@ func (r *Request) execSelectionSet(ctx context.Context, sels []selected.Selectio
 
 	case *types.ScalarTypeDefinition:
 		v := resolver.Interface()
-		data, err := json.Marshal(v)
-		if err != nil {
+		if err := out.writeScalar(v); err != nil {
 			panic(errors.Errorf("could not marshal %v: %s", v, err))
 		}
-		out.Write(data)
 
 	case *types.EnumTypeDefinition:
 		var stringer fmt.Stringer = resolver
@@ -315,9 +307,9 @@ func (r *Request) execSelectionSet(ctx context.Context, sels []selected.Selectio
 	}
 }
 
-func (r *Request) execList(ctx context.Context, sels []selected.Selection, typ *types.List, path *pathSegment, s *resolvable.Schema, resolver reflect.Value, out *bytes.Buffer) {
+func (r *Request) execList(ctx context.Context, sels []selected.Selection, typ *types.List, path *pathSegment, s *resolvable.Schema, resolver reflect.Value, out *output) {
 	l := resolver.Len()
-	entryouts := make([]bytes.Buffer, l)
+	entryouts := make([]output, l)
 
 	if selected.HasAsyncSel(sels) {
 		// Limit the number of concurrent goroutines spawned as it can lead to large
@@ -344,10 +336,10 @@ func (r *Request) execList(ctx context.Context, sels []selected.Selection, typ *
 	_, listOfNonNull := typ.OfType.(*types.NonNull)
 
 	out.WriteByte('[')
-	for i, entryout := range entryouts {
+	for i := range entryouts {
 		// If the list wraps a non-null type and one of the list elements
 		// resolves to null, then the entire list resolves to null.
-		if listOfNonNull && resolvedToNull(&entryout) {
+		if listOfNonNull && entryouts[i].isNull() {
 			out.Reset()
 			out.WriteString("null")
 			return
@@ -356,7 +348,7 @@ func (r *Request) execList(ctx context.Context, sels []selected.Selection, typ *
 		if i > 0 {
 			out.WriteByte(',')
 		}
-		out.Write(entryout.Bytes())
+		out.writeOutput(&entryouts[i])
 	}
 	out.WriteByte(']')
 }

@@ -147,6 +147,12 @@ func (o *output) writeMarshaler(m json.Marshaler) error {
 		}
 	}
 	if err != nil {
+		// The error json.Marshal reports differs between the v1 and v2 backed
+		// encoding/json, so let it report the error. This only calls
+		// m.MarshalJSON again when it failed or returned invalid JSON.
+		if _, mErr := json.Marshal(m); mErr != nil {
+			return mErr
+		}
 		return &json.MarshalerError{Type: reflect.TypeOf(m), Err: err}
 	}
 	return nil
@@ -176,6 +182,18 @@ var htmlSafeSet = func() (set [utf8.RuneSelf]bool) {
 }()
 
 const hex = "0123456789abcdef"
+
+// invalidUTF8 is what json.Marshal encodes each invalid UTF-8 byte in a string
+// as. It is the escaped `\ufffd` for encoding/json v1, but the raw U+FFFD
+// character when encoding/json is backed by v2 (GOEXPERIMENT=jsonv2, the
+// default since Go 1.27).
+var invalidUTF8 = func() string {
+	b, err := json.Marshal("\xff")
+	if err != nil {
+		panic(err)
+	}
+	return string(b[1 : len(b)-1])
+}()
 
 // appendJSONString appends s encoded as a JSON string, exactly like
 // json.Marshal. It is adapted from appendString in encoding/json with
@@ -213,7 +231,7 @@ func appendJSONString(dst []byte, s string) []byte {
 		c, size := utf8.DecodeRuneInString(s[i:])
 		if c == utf8.RuneError && size == 1 {
 			dst = append(dst, s[start:i]...)
-			dst = append(dst, `\ufffd`...)
+			dst = append(dst, invalidUTF8...)
 			i += size
 			start = i
 			continue
@@ -249,9 +267,12 @@ func jsonStringLen(s string) int {
 			continue
 		}
 		c, size := utf8.DecodeRuneInString(s[i:])
-		if (c == utf8.RuneError && size == 1) || c == '\u2028' || c == '\u2029' {
-			n += len(`\ufffd`)
-		} else {
+		switch {
+		case c == utf8.RuneError && size == 1:
+			n += len(invalidUTF8)
+		case c == '\u2028' || c == '\u2029':
+			n += len(`\u2028`)
+		default:
 			n += size
 		}
 		i += size

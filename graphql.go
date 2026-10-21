@@ -83,6 +83,7 @@ type Schema struct {
 	useStringDescriptions    bool
 	disableIntrospection     bool
 	subscribeResolverTimeout time.Duration
+	undefinedInputField      func(ctx context.Context, operationName, inputType, field string)
 }
 
 func (s *Schema) ASTSchema() *types.Schema {
@@ -113,6 +114,17 @@ func UseFieldResolvers() SchemaOpt {
 func MaxDepth(n int) SchemaOpt {
 	return func(s *Schema) {
 		s.maxDepth = n
+	}
+}
+
+// UndefinedInputFieldHandler sets a function that is called for each entry of
+// an input object supplied through a variable that the input object type does
+// not define. Such entries are ignored, but the GraphQL spec requires them to
+// be rejected, which upstream graphql-go does since v1.10.3. This is a
+// Sourcegraph addition for finding clients that send them before upgrading.
+func UndefinedInputFieldHandler(f func(ctx context.Context, operationName, inputType, field string)) SchemaOpt {
+	return func(s *Schema) {
+		s.undefinedInputField = f
 	}
 }
 
@@ -190,7 +202,18 @@ func (s *Schema) ValidateWithVariables(queryString string, variables map[string]
 		return []*errors.QueryError{qErr}
 	}
 
-	return validation.Validate(s.schema, doc, variables, s.maxDepth)
+	return validation.Validate(s.schema, doc, variables, s.maxDepth, nil)
+}
+
+// undefinedInputFieldFunc returns the function validation calls for undefined
+// input object fields in variables.
+func (s *Schema) undefinedInputFieldFunc(ctx context.Context) func(operationName, inputType, field string) {
+	if s.undefinedInputField == nil {
+		return nil
+	}
+	return func(operationName, inputType, field string) {
+		s.undefinedInputField(ctx, operationName, inputType, field)
+	}
 }
 
 // Exec executes the given query with the schema's resolver. It panics if the schema was created
@@ -210,7 +233,7 @@ func (s *Schema) exec(ctx context.Context, queryString string, operationName str
 	}
 
 	validationFinish := s.validationTracer.TraceValidation(ctx)
-	errs := validation.Validate(s.schema, doc, variables, s.maxDepth)
+	errs := validation.Validate(s.schema, doc, variables, s.maxDepth, s.undefinedInputFieldFunc(ctx))
 	validationFinish(errs)
 	if len(errs) != 0 {
 		return &Response{Errors: errs}

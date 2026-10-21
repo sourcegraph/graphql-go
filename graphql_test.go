@@ -3758,6 +3758,47 @@ func TestErrorPropagation(t *testing.T) {
 	})
 }
 
+type undefinedInputResolver struct{}
+
+func (*undefinedInputResolver) Search(args struct {
+	Filter struct {
+		Name string
+		Tags *[]struct{ Name string }
+	}
+}) string {
+	return args.Filter.Name
+}
+
+func TestUndefinedInputFieldHandler(t *testing.T) {
+	t.Parallel()
+
+	type ctxKey struct{}
+	var got []string
+	schema := graphql.MustParseSchema(`
+		input Tag { name: String! }
+		input Filter { name: String!, tags: [Tag!] }
+		type Query { search(filter: Filter!): String! }
+	`, &undefinedInputResolver{}, graphql.UndefinedInputFieldHandler(func(ctx context.Context, operationName, inputType, field string) {
+		got = append(got, fmt.Sprint(ctx.Value(ctxKey{}), " ", operationName, " ", inputType, ".", field))
+	}))
+
+	ctx := context.WithValue(context.Background(), ctxKey{}, "request")
+	res := schema.Exec(ctx, `query Find($filter: Filter!) { search(filter: $filter) }`, "", map[string]interface{}{
+		"filter": map[string]interface{}{
+			"name":       "a",
+			"__typename": "Filter",
+			"tags":       []interface{}{map[string]interface{}{"name": "t", "colour": "red"}},
+		},
+	})
+	if len(res.Errors) != 0 || string(res.Data) != `{"search":"a"}` {
+		t.Fatalf("got data %s and errors %v, want undefined fields to be ignored", res.Data, res.Errors)
+	}
+	want := []string{"request Find Tag.colour", "request Find Filter.__typename"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("got undefined input fields %q, want %q", got, want)
+	}
+}
+
 // largeText is above the size from which the executor keeps values out of line,
 // and contains every kind of character that encoding/json escapes.
 var largeText = strings.Repeat("<a href=\"x\">&amp;</a>\t\\\b\f\r\n\x00\x7f\u2028\u2029 日本 \xff\xe2\x80 ", 4<<10)

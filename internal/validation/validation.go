@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"text/scanner"
@@ -34,6 +35,8 @@ type context struct {
 	fieldMap         map[*types.Field]fieldInfo
 	overlapValidated map[selectionPair]struct{}
 	maxDepth         int
+
+	onUndefinedInputField func(operationName, inputType, field string)
 }
 
 func (c *context) addErr(loc errors.Location, rule string, format string, a ...interface{}) {
@@ -65,8 +68,12 @@ func newContext(s *types.Schema, doc *types.ExecutableDefinition, maxDepth int) 
 	}
 }
 
-func Validate(s *types.Schema, doc *types.ExecutableDefinition, variables map[string]interface{}, maxDepth int) []*errors.QueryError {
+// Validate validates doc. If onUndefinedInputField is not nil, it is called
+// for each entry of an input object supplied through a variable that the input
+// object type does not define. Such entries are ignored.
+func Validate(s *types.Schema, doc *types.ExecutableDefinition, variables map[string]interface{}, maxDepth int, onUndefinedInputField func(operationName, inputType, field string)) []*errors.QueryError {
 	c := newContext(s, doc, maxDepth)
+	c.onUndefinedInputField = onUndefinedInputField
 
 	opNames := make(nameSet)
 	fragUsedBy := make(map[*types.FragmentDefinition][]*types.OperationDefinition)
@@ -229,6 +236,18 @@ func validateValue(c *opContext, v *types.InputValueDefinition, val interface{},
 		for _, f := range t.Values {
 			fieldVal := in[f.Name.Name]
 			validateValue(c, f, fieldVal, f.Type)
+		}
+		if c.onUndefinedInputField != nil {
+			var undefined []string
+			for name := range in {
+				if t.Values.Get(name) == nil {
+					undefined = append(undefined, name)
+				}
+			}
+			sort.Strings(undefined)
+			for _, name := range undefined {
+				c.onUndefinedInputField(c.ops[0].Name.Name, t.Name, name)
+			}
 		}
 	}
 }

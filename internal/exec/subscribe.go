@@ -1,7 +1,6 @@
 package exec
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -120,7 +119,7 @@ func (r *Request) Subscribe(ctx context.Context, s *resolvable.Schema, op *ast.O
 					MaxPooledBufferCapacity: r.MaxPooledBufferCapacity,
 					PanicHandler:            r.PanicHandler,
 				}
-				var out bytes.Buffer
+				var out output
 				func() {
 					timeout := r.SubscribeResolverTimeout
 					if timeout == 0 {
@@ -145,7 +144,7 @@ func (r *Request) Subscribe(ctx context.Context, s *resolvable.Schema, op *ast.O
 
 						if !propagateChildError {
 							fmt.Fprintf(&out, `{"%s":`, f.field.Alias)
-							out.Write(buf.Bytes())
+							out.writeOutput(buf)
 							out.WriteString(`}`)
 						}
 					}()
@@ -162,7 +161,7 @@ func (r *Request) Subscribe(ctx context.Context, s *resolvable.Schema, op *ast.O
 					// TODO: maybe block until sent?
 					select {
 					case <-subCtx.Done():
-					case c <- &Response{Data: out.Bytes(), Errors: subR.Errs}:
+					case c <- &Response{Data: out.bytes(), Errors: subR.Errs}:
 					}
 				}()
 			}

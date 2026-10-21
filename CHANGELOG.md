@@ -1,5 +1,7 @@
 # CHANGELOG
 
+* [IMPROVEMENT] Reduce the memory needed to return large scalars. Values of 64KiB or more are no longer copied into every enclosing field's buffer, and large strings are escaped once, directly into the response. Returning a 16MiB string nested three fields deep now allocates about the size of the response instead of 7-8x that. Output stays byte-identical to `json.Marshal`.
+
 * [FEATURE] Add `ValidateDeprecated()` schema option to enable validation of deprecated fields, arguments (including directive arguments), input fields, and enum values in queries. When enabled, usage of deprecated schema elements results in validation errors. This opt-in approach allows applications to enforce deprecation policies without breaking existing clients.
 
 * [FEATURE] Support executable-document description strings on full-form operations, fragments, and variable definitions. Descriptions remain non-semantic and do not change validation or execution behavior. Executable `#` comments remain ignored.
